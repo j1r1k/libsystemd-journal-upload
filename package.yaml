@@ -1,0 +1,74 @@
+name: libsystemd-journal-upload
+version: 0.1.0.0
+github: "j1r1k/libsystemd-journal-upload"
+license: BSD3
+author: "Jiri Marsicek"
+maintainer: "jiri.marsicek@gmail.com"
+copyright: "2016 Jiri Marsicek"
+
+extra-source-files:
+  - README.md
+  - ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description: Please see the README on GitHub at <https://github.com/j1r1k/libsystemd-journal-upload#readme>
+
+dependencies:
+  - base >= 4.7 && < 5
+  - libsystemd-journal
+  - bytestring
+  - either
+  - free
+  - lens
+  - pipes
+  - pipes-group
+  - pipes-safe
+  - pipes-concurrency
+  - pcre-light
+  - unordered-containers
+  - time
+  - text
+  - transformers
+  - http-client
+  - http-client-tls
+  - aeson
+  - base64
+  - utf8-string
+  - network-uri
+  - http-types
+  - directory
+  - filepath
+  - extra
+  - mtl
+  - iso8601-time
+
+library:
+  source-dirs: src
+
+executables:
+  libsystemd-journal-upload-exe:
+    main: Main.hs
+    source-dirs: app
+    ghc-options:
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
+    dependencies:
+      - libsystemd-journal-upload
+
+tests:
+  libsystemd-journal-upload-test:
+    main: Spec.hs
+    source-dirs: test
+    ghc-options:
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
+    dependencies:
+      - libsystemd-journal-upload
