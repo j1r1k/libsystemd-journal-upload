@@ -47,6 +47,9 @@ dependencies:
   - extra
   - mtl
   - iso8601-time
+  - retry
+  - exceptions
+  - co-log
 
 library:
   source-dirs: src

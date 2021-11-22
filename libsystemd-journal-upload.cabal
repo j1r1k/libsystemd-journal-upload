@@ -36,8 +36,10 @@ library
     , base >=4.7 && <5
     , base64
     , bytestring
+    , co-log
     , directory
     , either
+    , exceptions
     , extra
     , filepath
     , free
@@ -54,6 +56,7 @@ library
     , pipes-concurrency
     , pipes-group
     , pipes-safe
+    , retry
     , text
     , time
     , transformers
@@ -73,8 +76,10 @@ executable libsystemd-journal-upload-exe
     , base >=4.7 && <5
     , base64
     , bytestring
+    , co-log
     , directory
     , either
+    , exceptions
     , extra
     , filepath
     , free
@@ -92,6 +97,7 @@ executable libsystemd-journal-upload-exe
     , pipes-concurrency
     , pipes-group
     , pipes-safe
+    , retry
     , text
     , time
     , transformers
@@ -112,8 +118,10 @@ test-suite libsystemd-journal-upload-test
     , base >=4.7 && <5
     , base64
     , bytestring
+    , co-log
     , directory
     , either
+    , exceptions
     , extra
     , filepath
     , free
@@ -131,6 +139,7 @@ test-suite libsystemd-journal-upload-test
     , pipes-concurrency
     , pipes-group
     , pipes-safe
+    , retry
     , text
     , time
     , transformers

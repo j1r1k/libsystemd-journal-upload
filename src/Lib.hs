@@ -10,15 +10,18 @@ module Lib
   )
 where
 
+import Colog.Monad (WithLog)
 import Control.Applicative ((<|>))
 import Control.Exception.Base (throw)
 import Control.Lens (_16')
 import Control.Lens.Internal.Zoom (Effect (Effect))
 import Control.Monad (void)
+import Control.Monad.Catch (Handler (Handler))
 import Control.Monad.Except (ExceptT (ExceptT), MonadError, runExceptT, throwError)
 import Control.Monad.Extra (ifM)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Except (except)
+import Control.Retry (RetryPolicyM, RetryStatus, capDelay, exponentialBackoff, recovering, retryPolicyDefault)
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Types as A (JSONPathElement (Key), Parser, parserThrowError, prependFailure, typeMismatch)
@@ -179,11 +182,30 @@ formatJournalEntryTime entry =
       timestampUTCTime = addUTCTime (fromInteger micros / (1000 * 1000)) (posixSecondsToUTCTime (fromInteger seconds))
    in formatISO8601Micros timestampUTCTime
 
+httpRetryPolicy :: Monad m => RetryPolicyM m
+httpRetryPolicy = capDelay (60 * 1000 * 1000) (exponentialBackoff (1000 * 1000))
+
+retryHttp :: (MonadIO m, MonadMask m) => (RetryStatus -> m a) -> m a
+retryHttp = recovering httpRetryPolicy [handleHttpException]
+  where
+    handleHttpException status =
+      Handler
+        ( \(ex :: HTTP.HttpException) ->
+            let res = case ex of
+                  HTTP.HttpExceptionRequest _ content -> case content of
+                    HTTP.ResponseTimeout -> True
+                    HTTP.ConnectionTimeout -> True
+                    HTTP.ConnectionFailure se -> True
+                    _ -> False
+                  _ -> False
+             in fmap (const res) $ liftIO $ putStrLn ("Received " ++ show ex ++ ", retry=" ++ show res)
+        )
+
 processJournalEntry :: (MonadIO m) => HTTP.Manager -> FilePath -> JournalUploadConfig -> Request -> JournalEntry -> m ()
 processJournalEntry httpManager stateFilePath config baseRequest journalEntry = do
   let body = encodeJournalFields config journalEntry
-  -- liftIO $ print body
-  void $ liftIO $ HTTP.httpNoBody (baseRequest {requestBody = RequestBodyLBS body}) httpManager
+  liftIO $ print body
+  void $ liftIO $ retryHttp $ const (HTTP.httpNoBody (baseRequest {requestBody = RequestBodyLBS body}) httpManager)
   liftIO $ writeJournalUploadState stateFilePath JournalUploadState {lastCursor = SerializableJournalEntryCursor $ journalEntryCursor journalEntry}
 
 makeJournalUploader :: MonadIO m => FilePath -> JournalUploadConfig -> IO (JournalEntry -> m ())
