@@ -1,21 +1,11 @@
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
 
-module Systemd.Journal.Upload where
+module Systemd.Journal.Filter where
 
-import Data.Aeson (FromJSON)
 import Data.ByteString (ByteString)
-import Data.ByteString.Base64 (decodeBase64, encodeBase64)
 import Data.Foldable (foldr')
 import qualified Data.HashMap.Strict as Map (lookup)
 import Data.List.NonEmpty (NonEmpty ((:|)))
-import Data.Text (Text)
-import qualified Data.Text as Text
-import Data.Text.Encoding (encodeUtf8)
-import GHC.Generics (Generic)
 import Pipes (Pipe)
 import qualified Pipes.Prelude as PP
 import Systemd.Journal

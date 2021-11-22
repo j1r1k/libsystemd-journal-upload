@@ -21,47 +21,43 @@ description: Please see the README on GitHub at <https://github.com/j1r1k/libsys
 
 dependencies:
   - base >= 4.7 && < 5
-  - libsystemd-journal
-  - bytestring
-  - either
-  - free
-  - lens
-  - pipes
-  - pipes-group
-  - pipes-safe
-  - pipes-concurrency
-  - pcre-light
-  - unordered-containers
-  - time
-  - text
-  - transformers
-  - http-client
-  - http-client-tls
   - aeson
   - base64
-  - utf8-string
-  - network-uri
-  - http-types
+  - bytestring
   - directory
-  - filepath
-  - extra
-  - mtl
-  - iso8601-time
-  - retry
   - exceptions
-  - co-log
+  - extra
+  - filepath
+  - http-client
+  - http-client-tls
+  - http-types
+  - iso8601-time
+  - libsystemd-journal
+  - mtl
+  - network-uri
+  - pipes
+  - pipes-safe
+  - retry
+  - simple-logger
+  - text
+  - time
+  - transformers
+  - unordered-containers
+  - utf8-string
 
 library:
   source-dirs: src
-
+  ghc-options:
+    - -Wall
 executables:
-  libsystemd-journal-upload-exe:
+  journal-upload-papertrail:
     main: Main.hs
     source-dirs: app
     ghc-options:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
+      - -Wall
     dependencies:
       - libsystemd-journal-upload
 

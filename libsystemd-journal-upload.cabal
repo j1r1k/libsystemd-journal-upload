@@ -25,38 +25,32 @@ source-repository head
 
 library
   exposed-modules:
-      Lib
-      Systemd.Journal.Upload
+      Systemd.Journal.Filter
   other-modules:
       Paths_libsystemd_journal_upload
   hs-source-dirs:
       src
+  ghc-options: -Wall
   build-depends:
       aeson
     , base >=4.7 && <5
     , base64
     , bytestring
-    , co-log
     , directory
-    , either
     , exceptions
     , extra
     , filepath
-    , free
     , http-client
     , http-client-tls
     , http-types
     , iso8601-time
-    , lens
     , libsystemd-journal
     , mtl
     , network-uri
-    , pcre-light
     , pipes
-    , pipes-concurrency
-    , pipes-group
     , pipes-safe
     , retry
+    , simple-logger
     , text
     , time
     , transformers
@@ -64,40 +58,34 @@ library
     , utf8-string
   default-language: Haskell2010
 
-executable libsystemd-journal-upload-exe
+executable journal-upload-papertrail
   main-is: Main.hs
   other-modules:
       Paths_libsystemd_journal_upload
   hs-source-dirs:
       app
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -Wall
   build-depends:
       aeson
     , base >=4.7 && <5
     , base64
     , bytestring
-    , co-log
     , directory
-    , either
     , exceptions
     , extra
     , filepath
-    , free
     , http-client
     , http-client-tls
     , http-types
     , iso8601-time
-    , lens
     , libsystemd-journal
     , libsystemd-journal-upload
     , mtl
     , network-uri
-    , pcre-light
     , pipes
-    , pipes-concurrency
-    , pipes-group
     , pipes-safe
     , retry
+    , simple-logger
     , text
     , time
     , transformers
@@ -118,28 +106,22 @@ test-suite libsystemd-journal-upload-test
     , base >=4.7 && <5
     , base64
     , bytestring
-    , co-log
     , directory
-    , either
     , exceptions
     , extra
     , filepath
-    , free
     , http-client
     , http-client-tls
     , http-types
     , iso8601-time
-    , lens
     , libsystemd-journal
     , libsystemd-journal-upload
     , mtl
     , network-uri
-    , pcre-light
     , pipes
-    , pipes-concurrency
-    , pipes-group
     , pipes-safe
     , retry
+    , simple-logger
     , text
     , time
     , transformers
