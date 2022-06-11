@@ -42,7 +42,8 @@ packages:
 #
 # extra-deps: []
 extra-deps:
-  - ../libsystemd-journal
+  - git: https://github.com/j1r1k/libsystemd-journal.git
+    commit: e2ba7a7670253e918ba9b32e61f29d7d7b9c0999
   - simple-logger-0.1.1@sha256:a21912c52a702b4e3f2376f61e5bde61cb4504debe5269dd9f9dc762097ffdbd,1098
 # Override default flag values for local packages and extra-deps
 # flags: {}

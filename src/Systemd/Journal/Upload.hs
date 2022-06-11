@@ -1,16 +1,16 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Main where
+module Systemd.Journal.Upload where
 
 import Control.Logger.Simple (logInfo)
 import Control.Monad (void)
 import Control.Monad.Catch (Handler (Handler))
-import Control.Monad.Except (ExceptT (ExceptT), runExceptT)
+import Control.Monad.Except (ExceptT (ExceptT))
 import Control.Monad.Extra (ifM)
 import Control.Monad.IO.Class (MonadIO, liftIO)
-import Control.Monad.Trans.Except (except)
 import Control.Retry (RetryPolicyM, RetryStatus, capDelay, exponentialBackoff, recovering)
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
 import qualified Data.Aeson as A
@@ -20,14 +20,13 @@ import Data.ByteString (ByteString)
 import Data.ByteString.Base64 (decodeBase64, encodeBase64)
 import qualified Data.ByteString.Lazy as BL (ByteString)
 import qualified Data.ByteString.Lazy.UTF8 as UTF8L (fromString)
-import qualified Data.ByteString.UTF8 as UTF8 (fromString)
 import Data.Functor (($>))
 import Data.HashMap.Internal.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map (lookup, singleton, toList)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import qualified Data.Text as Text (intercalate, unpack)
-import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import qualified Data.Text as Text (intercalate, pack, unpack)
+import Data.Text.Encoding (decodeLatin1, encodeUtf8)
 import Data.Time (addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.ISO8601 (formatISO8601Micros)
@@ -36,13 +35,11 @@ import Network.HTTP.Client (Request (checkResponse, method, requestBody, request
 import qualified Network.HTTP.Client as HTTP (HttpException (HttpExceptionRequest), HttpExceptionContent (ConnectionFailure, ConnectionTimeout, ResponseTimeout), Manager, httpNoBody, newManager, requestFromURI, throwErrorStatusCodes)
 import qualified Network.HTTP.Client.TLS as HTTP (tlsManagerSettings)
 import Network.HTTP.Types (Header, Method, methodPost)
-import qualified Network.HTTP.Types as HTTP (hAuthorization)
-import Network.URI (URI, nullURI, parseURI)
+import Network.URI (URI, nullURI)
 import Pipes (Producer, runEffect, (>->))
 import qualified Pipes.Prelude as P (dropWhile, mapM_)
 import Pipes.Safe (MonadMask, MonadSafe, runSafeT)
 import System.Directory (XdgDirectory (XdgData), createDirectoryIfMissing, doesFileExist, getXdgDirectory)
-import System.Environment (lookupEnv)
 import System.FilePath ((<.>), (</>))
 import Systemd.Journal
   ( Direction (Forwards),
@@ -59,13 +56,15 @@ import qualified Systemd.Journal as Priority (Priority (Warning))
 import Systemd.Journal.Filter (upToPriority)
 import Text.Printf (printf)
 
+newtype JournalUploadError = StateMalformedError String deriving (Show)
+
 getJournalStateFilePath :: String -> IO FilePath
 getJournalStateFilePath producerId = do
   dataDir <- getXdgDirectory XdgData $ "systemd" </> "journal-upload"
   createDirectoryIfMissing True dataDir
   return $ dataDir </> ("state" <.> producerId <.> "json")
 
-getJournalStart :: (MonadIO m) => FilePath -> ExceptT AppError m Start
+getJournalStart :: (MonadIO m) => FilePath -> ExceptT JournalUploadError m Start
 getJournalStart stateFilePath =
   ifM
     (liftIO $ doesFileExist stateFilePath)
@@ -94,19 +93,16 @@ instance FromJSON SerializableJournalEntryCursor where
 instance ToJSON SerializableJournalEntryCursor where
   toJSON (SerializableJournalEntryCursor cursor) = toJSON $ encodeBase64 cursor
 
-data JournalUploadState = JournalUploadState
-  { lastCursor :: SerializableJournalEntryCursor
-  }
-  deriving (Eq, Generic, Show)
+newtype JournalUploadState = JournalUploadState {lastCursor :: SerializableJournalEntryCursor} deriving (Eq, Generic, Show)
 
 instance FromJSON JournalUploadState
 
 instance ToJSON JournalUploadState
 
-readJournalUploadState :: (MonadIO m) => FilePath -> ExceptT AppError m JournalUploadState
+readJournalUploadState :: (MonadIO m) => FilePath -> ExceptT JournalUploadError m JournalUploadState
 readJournalUploadState fp = ExceptT $ first StateMalformedError <$> liftIO (A.eitherDecodeFileStrict fp)
 
-readJournalUploadStateCursor :: (MonadIO m) => FilePath -> ExceptT AppError m Start
+readJournalUploadStateCursor :: (MonadIO m) => FilePath -> ExceptT JournalUploadError m Start
 readJournalUploadStateCursor fp = do
   JournalUploadState {lastCursor = SerializableJournalEntryCursor cursor} <- readJournalUploadState fp
   return $ FromCursor cursor Forwards
@@ -114,13 +110,37 @@ readJournalUploadStateCursor fp = do
 writeJournalUploadState :: FilePath -> JournalUploadState -> IO ()
 writeJournalUploadState = A.encodeFile
 
+pickJournalFields :: [(Text, Text)] -> JournalEntry -> HashMap Text Text
+pickJournalFields fields journalEntry =
+  foldMap (\(key, newKey) -> maybe mempty (Map.singleton newKey . decodeLatin1) $ Map.lookup (mkJournalField key) $ journalEntryFields journalEntry) fields
+
+syslogStructuredData :: JournalFields -> JournalEntry -> Text
+syslogStructuredData (JournalFields fields) entry = Text.intercalate " " $ fmap printPair $ Map.toList $ pickJournalFields fields entry
+  where
+    printPair :: (Text, Text) -> Text
+    printPair (k, v) = k <> "=\"" <> v <> "\""
+
+newtype JournalFields = JournalFields [(Text, Text)]
+
+encodeSyslog :: JournalFields -> JournalEntry -> BL.ByteString
+encodeSyslog journalFields entry =
+  let t = formatJournalEntryTime entry
+      fields = journalEntryFields entry
+      p = decodeLatin1 $ fromMaybe "6" $ Map.lookup "PRIORITY" fields
+      h = decodeLatin1 $ fromMaybe "-" $ Map.lookup "_HOSTNAME" fields
+      u = decodeLatin1 $ fromMaybe "-" $ Map.lookup "SYSLOG_IDENTIFIER" fields
+      pid = decodeLatin1 $ fromMaybe "-" $ Map.lookup "_PID" fields
+      m = syslogStructuredData journalFields entry
+   in UTF8L.fromString $ printf "<22>%s %s %s %s %s - - [%s timestamp=%s]" p t h u pid m t
+
 data JournalUploadConfig = JournalUploadConfig
   { minPriority :: Priority,
     mode :: Mode,
     destinationUri :: URI,
-    journalRequestHeaders :: [Header],
-    journalRequestMethod :: Method,
-    journalFields :: [(Text, Text)]
+    journalUploadRequestHeaders :: [Header],
+    journalUploadRequestMethod :: Method,
+    journalUploadFields :: JournalFields,
+    journalUploadEncoder :: JournalFields -> JournalEntry -> BL.ByteString
   }
 
 defaultJournalUploadConfig :: JournalUploadConfig
@@ -129,48 +149,11 @@ defaultJournalUploadConfig =
     { minPriority = Priority.Warning,
       mode = Waiting,
       destinationUri = nullURI,
-      journalRequestHeaders = mempty,
-      journalRequestMethod = methodPost,
-      journalFields = [("_UID", "uid"), ("MESSAGE", "message")]
+      journalUploadRequestHeaders = mempty,
+      journalUploadRequestMethod = methodPost,
+      journalUploadFields = JournalFields [("_UID", "uid"), ("MESSAGE", "message")],
+      journalUploadEncoder = encodeSyslog
     }
-
-papertrailUploadConfig :: ByteString -> Maybe JournalUploadConfig
-papertrailUploadConfig token =
-  let maybeUri = parseURI "https://logs.collector.solarwinds.com/v1/log"
-   in fmap
-        ( \uri ->
-            defaultJournalUploadConfig
-              { destinationUri = uri,
-                journalRequestHeaders = [(HTTP.hAuthorization, "Basic " <> token)]
-              }
-        )
-        maybeUri
-
-pickJournalFields :: [(Text, Text)] -> JournalEntry -> HashMap Text Text
-pickJournalFields fields journalEntry =
-  foldMap (\(key, newKey) -> maybe mempty (Map.singleton newKey . decodeUtf8) $ Map.lookup (mkJournalField key) $ journalEntryFields journalEntry) fields
-
--- uploadJson :: (MonadIO m, ToJSON a) => HTTP.Manager -> HTTP.Request -> a -> m ()
--- uploadJson httpManager baseRequest entry = do
---   let request = baseRequest {requestBody = RequestBodyLBS $ A.encode entry}
---   void $ liftIO $ HTTP.httpNoBody request httpManager
-
-syslogStructuredData :: [(Text, Text)] -> JournalEntry -> Text
-syslogStructuredData fields entry = Text.intercalate " " $ fmap printPair $ Map.toList $ pickJournalFields fields entry
-  where
-    printPair :: (Text, Text) -> Text
-    printPair (k, v) = k <> "=\"" <> v <> "\""
-
-encodeJournalFields :: JournalUploadConfig -> JournalEntry -> BL.ByteString
-encodeJournalFields config entry =
-  let t = formatJournalEntryTime entry
-      fields = journalEntryFields entry
-      p = decodeUtf8 $ fromMaybe "6" $ Map.lookup "PRIORITY" fields
-      h = decodeUtf8 $ fromMaybe "-" $ Map.lookup "_HOSTNAME" fields
-      u = decodeUtf8 $ fromMaybe "-" $ Map.lookup "SYSLOG_IDENTIFIER" fields
-      pid = decodeUtf8 $ fromMaybe "-" $ Map.lookup "_PID" fields
-      m = syslogStructuredData (journalFields config) entry
-   in UTF8L.fromString $ printf "<22>%s %s %s %s %s - - [%s timestamp=%s]" p t h u pid m t
 
 formatJournalEntryTime :: JournalEntry -> String
 formatJournalEntryTime entry =
@@ -194,14 +177,13 @@ retryHttp = recovering httpRetryPolicy [handleHttpException]
                     HTTP.ConnectionFailure _ -> True
                     _ -> False
                   _ -> False
-             in fmap (const res) $ liftIO $ putStrLn ("Received " ++ show ex ++ ", retry=" ++ show res)
+             in fmap (const res) $ liftIO $ logInfo $ Text.pack ("Received " ++ show ex ++ ", retry=" ++ show res)
         )
 
 processJournalEntry :: (MonadIO m) => HTTP.Manager -> FilePath -> JournalUploadConfig -> Request -> JournalEntry -> m ()
 processJournalEntry httpManager stateFilePath config baseRequest journalEntry = do
-  -- liftIO $ print journalEntry
-  let body = encodeJournalFields config journalEntry
-  -- liftIO $ print body
+  let uploadEncoder = journalUploadEncoder config
+  let body = uploadEncoder (journalUploadFields config) journalEntry
   void $ liftIO $ retryHttp $ const (HTTP.httpNoBody (baseRequest {requestBody = RequestBodyLBS body}) httpManager)
   liftIO $ writeJournalUploadState stateFilePath JournalUploadState {lastCursor = SerializableJournalEntryCursor $ journalEntryCursor journalEntry}
 
@@ -211,33 +193,16 @@ makeJournalUploader stateFilePath config = do
   requestWithURI <- HTTP.requestFromURI (destinationUri config)
   let baseRequest =
         requestWithURI
-          { method = journalRequestMethod config,
-            requestHeaders = journalRequestHeaders config,
+          { method = journalUploadRequestMethod config,
+            requestHeaders = journalUploadRequestHeaders config,
             checkResponse = HTTP.throwErrorStatusCodes
           }
   return $ processJournalEntry httpManager stateFilePath config baseRequest
 
-data AppError
-  = StateMalformedError String
-  | DestinationURIInvalid
-  | TokenUnavailable
-  deriving (Show)
-
-runWithConfig :: (MonadIO m, MonadMask m) => JournalUploadConfig -> ExceptT AppError m ()
+runWithConfig :: (MonadIO m, MonadMask m) => JournalUploadConfig -> ExceptT JournalUploadError m ()
 runWithConfig config = do
   stateFilePath <- liftIO $ getJournalStateFilePath "default"
   journalUploader <- liftIO $ makeJournalUploader stateFilePath config
   start <- getJournalStart stateFilePath
   let journalProducer = makeJournalProducer config start
   runSafeT $ runEffect $ journalProducer >-> P.mapM_ journalUploader
-
-runPapertrail :: (MonadIO m, MonadMask m) => ExceptT AppError m ()
-runPapertrail = do
-  liftIO $ logInfo "Starting"
-  maybeToken <- liftIO $ lookupEnv "PAPERTRAIL_TOKEN"
-  token <- maybe (except $ Left TokenUnavailable) (pure . UTF8.fromString) maybeToken
-  config <- maybe (except $ Left DestinationURIInvalid) pure $ papertrailUploadConfig token
-  runWithConfig config
-
-main :: IO ()
-main = runExceptT runPapertrail >>= either (error . show) pure
