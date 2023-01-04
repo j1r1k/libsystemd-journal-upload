@@ -23,17 +23,13 @@ jobs:
         stack-version: 'latest'
 
     - name: Cache
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-cabal
+      uses: actions/cache@v1
       with:
-        path: ~/.cabal
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-          ${{ runner.os }}-build-
-          ${{ runner.os }}-
+        path: ~/.stack
+        key: ${{ runner.os }}-store-${{ hashFiles('stack.yaml.lock') }}-${{ hashFiles('libsystemd-journal-upload.cabal') }}
+
     - name: Build
       run: stack build
-    - name: Run tests
+
+    - name: Test
       run: stack test
