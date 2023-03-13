@@ -22,11 +22,21 @@ jobs:
         enable-stack: true
         stack-version: 'latest'
 
-    - name: Cache
-      uses: actions/cache@v1
+    - uses: actions/cache@v3
+      name: Cache ~/.stack
       with:
         path: ~/.stack
-        key: ${{ runner.os }}-store-${{ hashFiles('stack.yaml.lock') }}-${{ hashFiles('libsystemd-journal-upload.cabal') }}
+        key: ${{ runner.os }}-stack-global-${{ hashFiles('stack.yaml') }}-${{ hashFiles('package.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-stack-global-
+
+    - uses: actions/cache@v3
+      name: Cache .stack-work
+      with:
+        path: .stack-work
+        key: ${{ runner.os }}-stack-work-${{ hashFiles('stack.yaml') }}-${{ hashFiles('package.yaml') }}-${{ hashFiles('**/*.hs') }}
+        restore-keys: |
+          ${{ runner.os }}-stack-work-
 
     - name: Build
       run: stack build
