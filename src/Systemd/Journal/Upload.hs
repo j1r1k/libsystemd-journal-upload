@@ -55,6 +55,7 @@ import Systemd.Journal
 import qualified Systemd.Journal as Priority (Priority (Warning))
 import Systemd.Journal.Filter (upToPriority)
 import Text.Printf (printf)
+import qualified Text.Regex.Pcre2 as PCRE (matches)
 
 newtype JournalUploadError = StateMalformedError String deriving (Show)
 
@@ -120,7 +121,9 @@ syslogStructuredData (JournalFields fields) entry = Text.intercalate " " $ fmap 
     printPair :: (Text, Text) -> Text
     printPair (k, v) = k <> "=\"" <> v <> "\""
 
-newtype JournalFields = JournalFields [(Text, Text)]
+type Field = Text
+
+newtype JournalFields = JournalFields [(Field, Text)]
 
 encodeSyslog :: JournalFields -> JournalEntry -> BL.ByteString
 encodeSyslog journalFields entry =
@@ -133,6 +136,22 @@ encodeSyslog journalFields entry =
       m = syslogStructuredData journalFields entry
    in UTF8L.fromString $ printf "<22>%s %s %s %s %s - - [%s timestamp=%s]" p t h u pid m t
 
+type Regex = Text
+
+newtype JournalFilter = JournalFilter [EntryFilter]
+
+newtype EntryFilter = EntryFilter [(Field, Regex)]
+
+evalJournalFilters :: JournalFilter -> JournalEntry -> Bool
+evalJournalFilters (JournalFilter journalFilters) entry =
+   any evalEntryFilter journalFilters
+  where 
+    fields = journalEntryFields entry
+    evalEntryFilter (EntryFilter entryFilters) = 
+      all evalEntryFilterItem entryFilters
+    evalEntryFilterItem (field, regex) = 
+      all (PCRE.matches regex . decodeLatin1) $ Map.lookup (mkJournalField field) fields
+
 data JournalUploadConfig = JournalUploadConfig
   { minPriority :: Priority,
     mode :: Mode,
@@ -140,6 +159,7 @@ data JournalUploadConfig = JournalUploadConfig
     journalUploadRequestHeaders :: [Header],
     journalUploadRequestMethod :: Method,
     journalUploadFields :: JournalFields,
+    journalUploadFilter :: Maybe JournalFilter,
     journalUploadEncoder :: JournalFields -> JournalEntry -> BL.ByteString
   }
 
@@ -152,6 +172,7 @@ defaultJournalUploadConfig =
       journalUploadRequestHeaders = mempty,
       journalUploadRequestMethod = methodPost,
       journalUploadFields = JournalFields [("_UID", "uid"), ("MESSAGE", "message")],
+      journalUploadFilter = Nothing,
       journalUploadEncoder = encodeSyslog
     }
 

@@ -35,6 +35,7 @@ dependencies:
   - libsystemd-journal
   - mtl
   - network-uri
+  - pcre2
   - pipes
   - pipes-safe
   - retry

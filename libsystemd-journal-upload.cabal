@@ -1,6 +1,6 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.34.4.
+-- This file has been generated from package.yaml by hpack version 0.35.1.
 --
 -- see: https://github.com/sol/hpack
 
@@ -48,6 +48,7 @@ library
     , libsystemd-journal
     , mtl
     , network-uri
+    , pcre2
     , pipes
     , pipes-safe
     , retry
@@ -83,6 +84,7 @@ test-suite libsystemd-journal-upload-test
     , libsystemd-journal-upload
     , mtl
     , network-uri
+    , pcre2
     , pipes
     , pipes-safe
     , retry
