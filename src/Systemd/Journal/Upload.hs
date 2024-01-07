@@ -134,7 +134,8 @@ encodeSyslog journalFields entry =
    in UTF8L.fromString $ printf "<22>%s %s %s %s %s - - [%s timestamp=%s]" p t h u pid m t
 
 data JournalUploadConfig = JournalUploadConfig
-  { minPriority :: Priority,
+  { journalUploadProducerId :: String,
+    minPriority :: Priority,
     mode :: Mode,
     destinationUri :: URI,
     journalUploadRequestHeaders :: [Header],
@@ -147,7 +148,8 @@ data JournalUploadConfig = JournalUploadConfig
 defaultJournalUploadConfig :: JournalUploadConfig
 defaultJournalUploadConfig =
   JournalUploadConfig
-    { minPriority = Priority.Warning,
+    { journalUploadProducerId = "default",
+      minPriority = Priority.Warning,
       mode = Waiting,
       destinationUri = nullURI,
       journalUploadRequestHeaders = mempty,
@@ -203,7 +205,7 @@ makeJournalUploader stateFilePath config = do
 
 runWithConfig :: (MonadIO m, MonadMask m) => JournalUploadConfig -> ExceptT JournalUploadError m ()
 runWithConfig config = do
-  stateFilePath <- liftIO $ getJournalStateFilePath "default"
+  stateFilePath <- liftIO $ getJournalStateFilePath $ journalUploadProducerId config
   journalUploader <- liftIO $ makeJournalUploader stateFilePath config
   start <- getJournalStart stateFilePath
 
