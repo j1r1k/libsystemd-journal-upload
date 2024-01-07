@@ -37,7 +37,7 @@ library
     , base >=4.7 && <5
     , base64
     , bytestring
-    , directory
+    , directory >=1.3.7.0
     , exceptions
     , extra
     , filepath
@@ -72,7 +72,7 @@ test-suite libsystemd-journal-upload-test
     , base >=4.7 && <5
     , base64
     , bytestring
-    , directory
+    , directory >=1.3.7.0
     , exceptions
     , extra
     , filepath

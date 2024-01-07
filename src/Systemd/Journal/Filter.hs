@@ -1,18 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NamedFieldPuns #-}
 
 module Systemd.Journal.Filter where
 
-import Data.ByteString (ByteString)
 import Data.Foldable (foldr')
 import qualified Data.HashMap.Strict as Map (lookup)
 import Data.List.NonEmpty (NonEmpty ((:|)))
-import Pipes (Pipe)
-import qualified Pipes.Prelude as PP
-import Systemd.Journal
-
-filterFieldPipe :: Functor m => JournalField -> (ByteString -> Bool) -> Pipe JournalEntry JournalEntry m r
-filterFieldPipe field predicate =
-  PP.filter (maybe False predicate . Map.lookup field . journalEntryFields)
+import Data.Text (Text)
+import Data.Text.Encoding (decodeLatin1)
+import qualified Text.Regex.Pcre2 as PCRE (matches)
+import Systemd.Journal (Filter(Or, Match), JournalEntry(journalEntryFields), Priority, mkJournalField, encodePriority)
 
 anyMatch :: NonEmpty Filter -> Filter
 anyMatch (f1 :| fs) = foldr' Or f1 fs
@@ -24,3 +21,22 @@ upToPriority :: Priority -> Filter
 upToPriority pr =
   let preds = init $ enumFromTo minBound pr
    in anyMatch $ fmap priorityFilter $ pr :| preds
+
+data FieldFilter = RegexFieldFilter {
+  rfField :: Text,
+  rfRegex :: Text
+} deriving (Eq, Show)
+
+matchesFieldFilter :: FieldFilter -> JournalEntry -> Bool
+matchesFieldFilter (RegexFieldFilter { rfField, rfRegex}) entry =
+      all (PCRE.matches rfRegex . decodeLatin1) $ Map.lookup (mkJournalField rfField) $ journalEntryFields entry
+
+data EntryFilter = 
+    NotEntryFilter EntryFilter
+  | AndEntryFilter [FieldFilter] 
+  deriving (Eq, Show)
+
+matchesEntryFilter :: EntryFilter -> JournalEntry -> Bool
+matchesEntryFilter (NotEntryFilter ef) entry = not $ matchesEntryFilter ef entry
+matchesEntryFilter (AndEntryFilter fieldFilters) entry =
+   all (\ff -> matchesFieldFilter ff entry) fieldFilters
