@@ -5,7 +5,7 @@
 
 module Systemd.Journal.Upload where
 
-import Control.Logger.Simple (logInfo)
+import Control.Logger.Simple (logDebug, logInfo, setLogLevel, LogLevel (LogInfo))
 import Control.Monad (void)
 import Control.Monad.Catch (Handler (Handler))
 import Control.Monad.Except (ExceptT (ExceptT))
@@ -40,6 +40,7 @@ import Pipes (Producer, runEffect, (>->))
 import qualified Pipes.Prelude as P (dropWhile, filter, mapM_)
 import Pipes.Safe (MonadMask, MonadSafe, runSafeT)
 import System.Directory (XdgDirectory (XdgState), createDirectoryIfMissing, doesFileExist, getXdgDirectory)
+import System.Environment (lookupEnv)
 import System.FilePath ((<.>), (</>))
 import Systemd.Journal
   ( Direction (Forwards),
@@ -205,11 +206,21 @@ makeJournalUploader stateFilePath config = do
 
 runWithConfig :: (MonadIO m, MonadMask m) => JournalUploadConfig -> ExceptT JournalUploadError m ()
 runWithConfig config = do
+  liftIO initLogger
+
   stateFilePath <- liftIO $ getJournalStateFilePath $ journalUploadProducerId config
   journalUploader <- liftIO $ makeJournalUploader stateFilePath config
   start <- getJournalStart stateFilePath
 
   let journalProducer = makeJournalProducer config start
   let entryPredicate = \je -> all (\ef -> matchesEntryFilter ef je) (journalUploadFilters config)
-  let pipeline = journalProducer >-> P.filter entryPredicate >-> P.mapM_ journalUploader
+  let pipeline = journalProducer >-> P.mapM_ logEntry >-> P.filter entryPredicate >-> P.mapM_ journalUploader
   runSafeT $ runEffect $ pipeline
+  where
+    initLogger :: IO ()
+    initLogger = do
+      maybeLogLevel<- fmap read <$> lookupEnv "LOG_LEVEL"
+      setLogLevel $ fromMaybe LogInfo maybeLogLevel
+
+    logEntry :: (MonadIO m) => JournalEntry -> m ()
+    logEntry entry = liftIO $ logDebug $ Text.pack $ "journalEntry: " <> show entry
