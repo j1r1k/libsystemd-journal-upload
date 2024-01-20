@@ -5,7 +5,7 @@
 
 module Systemd.Journal.Upload where
 
-import Control.Logger.Simple (logInfo)
+import Control.Logger.Simple (logDebug, logInfo, setLogLevel, LogLevel (LogInfo))
 import Control.Monad (void)
 import Control.Monad.Catch (Handler (Handler))
 import Control.Monad.Except (ExceptT (ExceptT))
@@ -37,9 +37,10 @@ import qualified Network.HTTP.Client.TLS as HTTP (tlsManagerSettings)
 import Network.HTTP.Types (Header, Method, methodPost)
 import Network.URI (URI, nullURI)
 import Pipes (Producer, runEffect, (>->))
-import qualified Pipes.Prelude as P (dropWhile, mapM_)
+import qualified Pipes.Prelude as P (dropWhile, filter, mapM_)
 import Pipes.Safe (MonadMask, MonadSafe, runSafeT)
-import System.Directory (XdgDirectory (XdgData), createDirectoryIfMissing, doesFileExist, getXdgDirectory)
+import System.Directory (XdgDirectory (XdgState), createDirectoryIfMissing, doesFileExist, getXdgDirectory)
+import System.Environment (lookupEnv)
 import System.FilePath ((<.>), (</>))
 import Systemd.Journal
   ( Direction (Forwards),
@@ -53,15 +54,14 @@ import Systemd.Journal
     openJournal,
   )
 import qualified Systemd.Journal as Priority (Priority (Warning))
-import Systemd.Journal.Filter (upToPriority)
+import Systemd.Journal.Filter (EntryFilter(..), upToPriority, matchesEntryFilter)
 import Text.Printf (printf)
-import qualified Text.Regex.Pcre2 as PCRE (matches)
 
 newtype JournalUploadError = StateMalformedError String deriving (Show)
 
 getJournalStateFilePath :: String -> IO FilePath
 getJournalStateFilePath producerId = do
-  dataDir <- getXdgDirectory XdgData $ "systemd" </> "journal-upload"
+  dataDir <- getXdgDirectory XdgState $ "journal-upload"
   createDirectoryIfMissing True dataDir
   return $ dataDir </> ("state" <.> producerId <.> "json")
 
@@ -121,9 +121,7 @@ syslogStructuredData (JournalFields fields) entry = Text.intercalate " " $ fmap 
     printPair :: (Text, Text) -> Text
     printPair (k, v) = k <> "=\"" <> v <> "\""
 
-type Field = Text
-
-newtype JournalFields = JournalFields [(Field, Text)]
+newtype JournalFields = JournalFields [(Text, Text)]
 
 encodeSyslog :: JournalFields -> JournalEntry -> BL.ByteString
 encodeSyslog journalFields entry =
@@ -136,43 +134,29 @@ encodeSyslog journalFields entry =
       m = syslogStructuredData journalFields entry
    in UTF8L.fromString $ printf "<22>%s %s %s %s %s - - [%s timestamp=%s]" p t h u pid m t
 
-type Regex = Text
-
-newtype JournalFilter = JournalFilter [EntryFilter]
-
-newtype EntryFilter = EntryFilter [(Field, Regex)]
-
-evalJournalFilters :: JournalFilter -> JournalEntry -> Bool
-evalJournalFilters (JournalFilter journalFilters) entry =
-   any evalEntryFilter journalFilters
-  where 
-    fields = journalEntryFields entry
-    evalEntryFilter (EntryFilter entryFilters) = 
-      all evalEntryFilterItem entryFilters
-    evalEntryFilterItem (field, regex) = 
-      all (PCRE.matches regex . decodeLatin1) $ Map.lookup (mkJournalField field) fields
-
 data JournalUploadConfig = JournalUploadConfig
-  { minPriority :: Priority,
+  { journalUploadProducerId :: String,
+    minPriority :: Priority,
     mode :: Mode,
     destinationUri :: URI,
     journalUploadRequestHeaders :: [Header],
     journalUploadRequestMethod :: Method,
     journalUploadFields :: JournalFields,
-    journalUploadFilter :: Maybe JournalFilter,
+    journalUploadFilters :: [EntryFilter],
     journalUploadEncoder :: JournalFields -> JournalEntry -> BL.ByteString
   }
 
 defaultJournalUploadConfig :: JournalUploadConfig
 defaultJournalUploadConfig =
   JournalUploadConfig
-    { minPriority = Priority.Warning,
+    { journalUploadProducerId = "default",
+      minPriority = Priority.Warning,
       mode = Waiting,
       destinationUri = nullURI,
       journalUploadRequestHeaders = mempty,
       journalUploadRequestMethod = methodPost,
       journalUploadFields = JournalFields [("_UID", "uid"), ("MESSAGE", "message")],
-      journalUploadFilter = Nothing,
+      journalUploadFilters = mempty,
       journalUploadEncoder = encodeSyslog
     }
 
@@ -222,8 +206,21 @@ makeJournalUploader stateFilePath config = do
 
 runWithConfig :: (MonadIO m, MonadMask m) => JournalUploadConfig -> ExceptT JournalUploadError m ()
 runWithConfig config = do
-  stateFilePath <- liftIO $ getJournalStateFilePath "default"
+  liftIO initLogger
+
+  stateFilePath <- liftIO $ getJournalStateFilePath $ journalUploadProducerId config
   journalUploader <- liftIO $ makeJournalUploader stateFilePath config
   start <- getJournalStart stateFilePath
+
   let journalProducer = makeJournalProducer config start
-  runSafeT $ runEffect $ journalProducer >-> P.mapM_ journalUploader
+  let entryPredicate = \je -> all (\ef -> matchesEntryFilter ef je) (journalUploadFilters config)
+  let pipeline = journalProducer >-> P.mapM_ logEntry >-> P.filter entryPredicate >-> P.mapM_ journalUploader
+  runSafeT $ runEffect $ pipeline
+  where
+    initLogger :: IO ()
+    initLogger = do
+      maybeLogLevel<- fmap read <$> lookupEnv "LOG_LEVEL"
+      setLogLevel $ fromMaybe LogInfo maybeLogLevel
+
+    logEntry :: (MonadIO m) => JournalEntry -> m ()
+    logEntry entry = liftIO $ logDebug $ Text.pack $ "journalEntry: " <> show entry
